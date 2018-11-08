@@ -22,7 +22,19 @@ namespace E
 {
 
 
-#define RTT_ns 100000000//0.1 second in nanoseconds
+#define RTT 100000000	//0.1 second in nanoseconds
+
+#define SEQ_OFFSET 		38
+#define ACK_OFFSET 		42
+#define SIZE_OFFSET 	46
+#define FLAGS_OFFSET 	47
+#define WINDOW_OFFSET 	48
+#define CHECKSUM_OFFSET 50
+
+#define SYN_FLAG 	0b00000010
+#define SYNACK_FLAG 0b00010010
+#define ACK_FLAG 	0b00010000
+#define FIN_FLAG	0b00000001
 
 /* For all sockets */
 enum class TCP_state{NONE, LISTEN, SYNSENT, SYNRCVD, ESTAB, FIN_WAIT1, FIN_WAIT2, CLOSING, TIME_WAIT, CLOSE_WAIT, LAST_ACK, CLOSED};
@@ -83,6 +95,9 @@ struct socket{
 	bool read_block;
 	uint8_t * r_buffer;
 	int r_n;
+
+	//timer
+	UUID timer_uuid;
 };
 
 //20 bytes.

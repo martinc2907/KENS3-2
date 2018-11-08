@@ -185,10 +185,10 @@ void TCPAssignment::fake_write(UUID syscallUUID, int pid, int sockfd, void * buf
 
 	uint8_t * char_buffer = (uint8_t *)buffer;
 
-	//CONSIDER RWND LATER. dunno this scenario: if rwnd is 100 and packet is 200, should i split 100 and 100? or not send at all.
 
 	/* Get socket to get connection information */
 	socket = find_fd(pid,sockfd);
+	assert(socket->state == TCP_state::ESTAB);
 
 	/* Block write if full */
 	if(socket->write_buffer_size == 51200){
@@ -217,9 +217,6 @@ void TCPAssignment::fake_write(UUID syscallUUID, int pid, int sockfd, void * buf
 		socket->source_port, socket->dest_port,
 		socket->sequence_number, socket->last_ack, 0b00010000);
 
-	if(socket->write_buffer == NULL){
-		socket->write_buffer = new std::list<Packet *>;
-	}
 	socket->write_buffer->push_back(packet);
 	socket->write_buffer_size += N;
 
@@ -450,13 +447,18 @@ void TCPAssignment::syscall_connect(UUID syscallUUID, int pid, int param1_int, s
 	/* make syn packet */
 	Packet * packet = makeHeaderPacket(source_ip, dest_ip,source_port,dest_port,socket->sequence_number,0,0b00000010,51200);
 
+	socket->write_buffer->push_back(packet);
+	//don't increment size.
+
 	/* update socket states */
 	socket->sequence_number++;
 	socket->state = TCP_state::SYNSENT;
 	socket->uuid = syscallUUID;	//since connect is blocking.
 
 	/* Send SYN packet-> */
-	this->sendPacket("IPv4", packet);
+	socket->timer_uuid = this->addTimer(socket, RTT);
+	this->sendPacket("IPv4", this->clonePacket(packet));
+	return;
 }
 
 void TCPAssignment::syscall_close(UUID syscallUUID, int pid, int param1_int){
@@ -626,12 +628,19 @@ void TCPAssignment::timerCallback(void* payload)
 {
 	std::cout<<"timer callback\n";
 
+	//resend SYN
+	struct socket * socket = (struct socket *) payload;
+	Packet * e = socket->write_buffer->front();
+	this->sendPacket("IPv4", this->clonePacket(e));
+	socket->timer_uuid = this->addTimer(socket, RTT);
+
+
 
 	//stop listening for FIN, and assume ACK was well received on the other end.
 	//so free socket.
-	struct socket * socket = (struct socket *) payload;
+	// struct socket * socket = (struct socket *) payload;
 	// assert(socket->pending_list->size() == 0 && socket->estab_list->size() == 0);	
-	remove_fd(socket->pid, socket->fd);
+	// remove_fd(socket->pid, socket->fd);
 }
 
 
@@ -729,6 +738,17 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 				free_resources(packet, rcv_header);
 				return;
 			}
+
+			/* Free SYN packet in write buffer */
+			Packet * e = socket->write_buffer->front();
+			uint8_t flags;
+			e->readData(FLAGS_OFFSET,&flags,1);
+			assert(flags == SYN_FLAG);//verify it's syn packet in write buffer
+			socket->write_buffer->pop_front();
+			freePacket(e);
+
+			//cancel for now-later change
+			this->cancelTimer(socket->timer_uuid);
 
 			/* Make packet */
 			new_packet = makeHeaderPacket(sender_dest_ip,sender_src_ip,ntohs(rcv_header->dest_port),ntohs(rcv_header->source_port),socket->sequence_number,ntohl(rcv_header->sequence_number)+1,0b00010000,51200);
@@ -930,9 +950,6 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 				// this->sendPacket("IPv4", new_packet);
 
 				/* Add to read buffer */
-				if(socket->read_buffer == NULL){
-					socket->read_buffer = new std::list<Packet *>;
-				}
 				socket->read_buffer->push_back( this->clonePacket(packet));
 				socket->read_buffer_size += packet->getSize()-54;
 
@@ -1199,7 +1216,7 @@ void TCPAssignment::remove_fd(int pid, int fd){
 		e = *it;
 		if(e->fd == fd && e->pid == pid){
 			delete(e->write_buffer);
-			delete[] e->read_buffer;
+			delete(e->read_buffer);
 			delete(e->pending_list);
 			delete(e->estab_list);
 			delete(e);
@@ -1237,7 +1254,7 @@ struct socket * TCPAssignment::create_socket(int pid, int fd){
 	e->last_rwnd = 51200;
 
 	//write buffer
-	e->write_buffer = NULL;
+	e->write_buffer = new std::list<Packet *>;
 	e->write_buffer_size = 0;
 
 	//things for write block
@@ -1247,7 +1264,7 @@ struct socket * TCPAssignment::create_socket(int pid, int fd){
 	e->w_n = 0;
 
 	//read buffer
-	e->read_buffer = NULL;
+	e->read_buffer = new std::list<Packet *>;
 	e->read_buffer_size = 0;
 	e->packet_data_read = 0;
 
