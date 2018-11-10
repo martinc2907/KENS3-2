@@ -35,6 +35,7 @@ namespace E
 #define SYNACK_FLAG 0b00010010
 #define ACK_FLAG 	0b00010000
 #define FIN_FLAG	0b00000001
+#define FINACK_FLAG 0b00010001
 
 /* For all sockets */
 enum class TCP_state{NONE, LISTEN, SYNSENT, SYNRCVD, ESTAB, FIN_WAIT1, FIN_WAIT2, CLOSING, TIME_WAIT, CLOSE_WAIT, LAST_ACK, CLOSED};
@@ -65,15 +66,14 @@ struct socket{
 	//for blocking calls
 	UUID uuid;
 
-
-
-
 	TCP_state state;
 
 	uint32_t sequence_number;
-	uint32_t last_ack;
+	uint32_t last_ack;	//so far, used for receiver sending ack
 
 	uint32_t last_rwnd;
+
+	uint32_t receiver_sequence_number; //so far, only used to keep track of receiver's seq as sender.
 
 	//write buffer
 	std::list< Packet *> * write_buffer;	//list of packets
@@ -97,7 +97,10 @@ struct socket{
 	int r_n;
 
 	//timer
+	bool timer_running;
 	UUID timer_uuid;
+
+	int duplicate_ack;
 };
 
 //20 bytes.
@@ -131,6 +134,7 @@ private:
 	std::list<struct socket *> socket_list;	//
 
 	int debug_count = 0;
+	int debug;
 	// /* Write buffer */
 	// std::list<Packet *> write_buffer; //list of packets
 	// uint32_t write_buffer_size = 0;
@@ -186,6 +190,12 @@ private:
 	/* Checksum */
 	virtual uint16_t tcp_sum(uint32_t source, uint32_t dest, uint8_t* buffer, size_t length);
 	virtual uint16_t one_sum(uint8_t* buffer, size_t size);
+
+
+	//timer
+	virtual void start_timer(struct socket * socket);
+	virtual void restart_timer(struct socket * socket);
+	virtual void cancel_timer(struct socket * socket);
 
 public:
 	TCPAssignment(Host* host);
