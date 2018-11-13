@@ -89,6 +89,8 @@ struct socket{
 	std::list<Packet *>* read_buffer; //list of packets.
 	uint32_t read_buffer_size;
 	uint32_t packet_data_read;	//how much data left for reading in the frontmost packet.
+	uint32_t read_up_to; //refers to what byte read() should read in terms of sequence number(used to reject redundant data packets)
+
 
 	//read block
 	UUID read_uuid;
@@ -158,6 +160,7 @@ private:
 	virtual void syscall_write(UUID syscallUUID, int pid, int sockfd, void * buffer, int n);
 	virtual void syscall_read(UUID syscallUUID, int pid, int sockfd, void * buffer, int n);
 
+	virtual bool add_to_sorted_read_buffer(Packet * packet, struct socket * socket);
 
 	/* Making packet */
 	virtual struct TCP_header * make_header(uint32_t source_ip, uint32_t dest_ip, uint16_t source_port, uint16_t dest_port, uint32_t seq_number, uint32_t ack_number,uint8_t flags, uint16_t window_size);

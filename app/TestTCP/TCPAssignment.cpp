@@ -530,6 +530,10 @@ void TCPAssignment::syscall_close(UUID syscallUUID, int pid, int param1_int){
 		/* Write header to packet */
 		packet->writeData(34,header,20);
 
+		/* Add to write buffer */
+		socket->write_buffer->push_back(packet);
+		//don't increment size-done writing anyways.adding to buffer just for retransmission.
+
 		/* Update socket states */
 		socket->sequence_number++;
 		socket->state = TCP_state::LAST_ACK;
@@ -538,8 +542,11 @@ void TCPAssignment::syscall_close(UUID syscallUUID, int pid, int param1_int){
 		delete(header);
 
 		/* Send FIN packet */
+		if(socket->timer_running == false){
+			start_timer(socket);
+		}
 		this->removeFileDescriptor(pid, fd);
-		this->sendPacket("IPv4", packet);
+		this->sendPacket("IPv4", this->clonePacket(packet));
 		this->returnSystemCall(syscallUUID,0);
 		return;
 	}
@@ -683,7 +690,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 	/* Do listening socket first */
 	struct socket * listening_socket = find_listening_socket_source(sender_dest_ip, sender_dest_port);
 	if(listening_socket!= NULL){
-		if(rcv_header->flags == 0b00000010){//listening socket only checks for syn. afterwards, new server socket handles connection.
+		if(rcv_header->flags == SYN_FLAG){//listening socket only checks for syn. afterwards, new server socket handles connection.
 			/* Create new socket and add to list */
 			struct socket * socket;
 			if(listening_socket->pending_list == NULL){
@@ -717,16 +724,23 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 				ntohs(rcv_header->dest_port),ntohs(rcv_header->source_port),
 				socket->sequence_number,ntohl(rcv_header->sequence_number)+1,0b00010010,51200);
 
+			/* Add synack to write buffer */
+			socket->write_buffer->push_back(new_packet);//don't increment write buffer size.
+
 			/* Update socket state */
 			socket->state = TCP_state::SYNRCVD;
 			socket->sequence_number++;
 			socket->last_ack = ntohl(rcv_header->sequence_number)+1;
+			socket->read_up_to = ntohl(rcv_header->sequence_number)+1; 
 
 			/* Free resources */
 			free_resources(packet, rcv_header);
 
 			/* Send SYNACK packet */
-			this->sendPacket("IPv4", new_packet);
+			if(socket->timer_running == false){
+				start_timer(socket);
+			}
+			this->sendPacket("IPv4", this->clonePacket(new_packet));
 			return;
 		}
 		//don't do anything so we can move on to code below.
@@ -803,7 +817,17 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 	}
 	else if(socket->state == TCP_state::SYNRCVD){
 
-		if(rcv_header->flags == 0b00010010){//synack--not in state diagram, but it's simmultaneous connect.
+		if(rcv_header->flags == SYN_FLAG){//retransmission
+			//send SYNACK.
+			Packet * e = socket->write_buffer->front();
+			this->sendPacket("IPv4", this->clonePacket(e));
+			//don't reset timer.
+
+			free_resources(packet, rcv_header);
+			return;
+		}
+
+		else if(rcv_header->flags == SYNACK_FLAG){//synack--not in state diagram, but it's simmultaneous connect.
 			/* Send ACK, become established */
 			/* Verify */
 			if( ntohl(rcv_header->ack_number) != socket->sequence_number){
@@ -826,7 +850,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			return;
 
 		}
-		else if(rcv_header->flags == 0b00010000){//ack
+		else if(rcv_header->flags == ACK_FLAG){//ack
 			/* Become established */
 			
 			/* Verify */
@@ -840,6 +864,16 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 
 			/* Connection established */
 			socket->state = TCP_state::ESTAB;
+
+			/* Free synack packet in write buffer */
+			Packet * e = socket->write_buffer->front();
+			socket->write_buffer->pop_front();
+			freePacket(e);
+			assert(socket->write_buffer->empty());
+
+			/* Cancel timer */
+			assert(socket->timer_running);
+			cancel_timer(socket);
 
 			/* If we got to this state as a server socket, not a client socket(simultaneous connect) */
 			if(listening_socket != NULL){
@@ -863,7 +897,6 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			free_resources(packet, rcv_header);
 			return;
 		}
-
 	}
 	else if(socket->state == TCP_state::ESTAB){
 		/* Should receive FIN(or data), send ACK packet */
@@ -993,9 +1026,27 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 					return;
 				}
 
-				/* Add to read buffer */
-				socket->read_buffer->push_back( this->clonePacket(packet));
-				socket->read_buffer_size += packet->getSize()-54;
+				/* If data that is way too far apart to be buffered, reject */
+				if(ntohl(rcv_header->sequence_number) > socket->read_up_to &&
+					 ntohl(rcv_header->sequence_number)-socket->read_up_to > 51200-socket->read_buffer_size){
+					//consider window size, not just +51200
+					free_resources(packet, rcv_header);
+					return;
+				}
+
+				/* If already read packets */
+				if(ntohl(rcv_header->sequence_number) < socket->read_up_to){
+					//send ack
+					new_packet = makeHeaderPacket(sender_dest_ip, sender_src_ip,
+						ntohs(rcv_header->dest_port),ntohs(rcv_header->source_port),
+						socket->sequence_number,);
+				}
+
+				//add to read buffer
+				bool success = add_to_sorted_read_buffer(this->clonePacket(packet), socket);
+				if(!success){
+					//send ack
+				}
 
 				/* Unblock read */
 				if(socket->read_block){
@@ -1003,7 +1054,10 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 				}
 
 				/* Send ACK */
-				Packet * new_packet = makeHeaderPacket(sender_dest_ip, sender_src_ip, ntohs(rcv_header->dest_port),ntohs(rcv_header->source_port),socket->sequence_number, ntohl(rcv_header->sequence_number)+packet->getSize()-54,0b00010000,51200-socket->read_buffer_size);
+				Packet * new_packet = makeHeaderPacket(sender_dest_ip, sender_src_ip,
+				 ntohs(rcv_header->dest_port),ntohs(rcv_header->source_port),
+				 socket->sequence_number, ntohl(rcv_header->sequence_number)+packet->getSize()-54,
+				 0b00010000,51200-socket->read_buffer_size);
 				this->sendPacket("IPv4", new_packet);
 
 				free_resources(packet, rcv_header);
@@ -1026,6 +1080,25 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			free_resources(packet, rcv_header);
 			return;
 		}
+	}
+	else if(socket->state == TCP_state::CLOSE_WAIT){
+		//can still receive fin, send ack
+		if(rcv_header->flags == FIN_FLAG){
+			if(ntohl(rcv_header->sequence_number != socket->receiver_sequence_number)){
+				free_resources(packet, rcv_header);
+				return;
+			}
+			new_packet = makeHeaderPacket(sender_dest_ip, sender_src_ip, ntohs(rcv_header->dest_port),ntohs(rcv_header->source_port), socket->sequence_number,ntohl(rcv_header->sequence_number)+1, ACK_FLAG,51200);
+			free_resources(packet, rcv_header);
+
+			this->sendPacket("IPv4", new_packet);
+			return;
+
+		}else{
+			free_resources(packet, rcv_header);
+			return;
+		}
+
 	}
 	else if(socket->state == TCP_state::FIN_WAIT1){
 
@@ -1557,6 +1630,7 @@ struct socket * TCPAssignment::create_socket(int pid, int fd){
 	e->read_buffer = new std::list<Packet *>;
 	e->read_buffer_size = 0;
 	e->packet_data_read = 0;
+	e->read_up_to = 0;  
 
 	//things for read block
 	e->read_block = false;
@@ -1715,6 +1789,49 @@ int TCPAssignment::minimum4(int a, int b, int c, int d){
 	}else{
 		return d;
 	}
+}
+
+
+//return true if successfully inserted, false if not(since it already exists)
+//adds a packet to the correct place in the read buffer even if it's out of order.
+bool TCPAssignment::add_to_sorted_read_buffer(Packet * packet, struct socket * socket){
+
+	uint32_t arriving_sequence_number;
+	std::list<Packet *>::iterator it;
+	Packet * e;
+
+	//if buffer empty, just insert.
+	if(socket->read_buffer->empty()){
+		socket->read_buffer->push_back(packet);
+		socket->read_buffer_size += packet->getSize()-54;
+		return true;
+	}
+
+	//get arriving packet's sequence number.
+	packet->readData(SEQ_OFFSET, &arriving_sequence_number, 4);
+
+	//find where to insert
+	for(it = socket->read_buffer->begin(); it!=socket->read_buffer->end();++it){
+		e = *it;
+
+		//if there is overlapping packet already
+		if(arriving_sequence_number == e->sequence_number){
+			return false;
+		}
+
+		if(arriving_sequence_number < e->sequence_number ){
+			//insert
+			socket->read_buffer->insert(it, packet);
+			socket->read_buffer->size += packet->getSize()-54;
+			return true;
+		}
+	}
+
+	//insert at end
+	socket->read_buffer->push_back(packet);
+	socket->read_buffer->size += packet->getSize()-54;
+	return true;
+	//list.insert(it, el) inserts to before the element that's pointed by it.
 }
 
 
