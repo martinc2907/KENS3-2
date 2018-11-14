@@ -87,10 +87,11 @@ struct socket{
 
 	//read buffer
 	std::list<Packet *>* read_buffer; //list of packets.
-	uint32_t read_buffer_size;
-	uint32_t packet_data_read;	//how much data left for reading in the frontmost packet.
-	uint32_t read_up_to; //refers to what byte read() should read in terms of sequence number(used to reject redundant data packets)
-
+	// uint32_t read_buffer_size; //don't need size since it's sort of dynamically calcualted as needed.
+	uint32_t packet_data_read;	//how much data currently read in the frontmost packet.
+	
+	uint32_t to_read; //refers to what byte read() should read in terms of sequence number(used to reject redundant data packets)
+	//actually points to first byte of packet, not the precise location within the packet.
 
 	//read block
 	UUID read_uuid;
@@ -160,13 +161,19 @@ private:
 	virtual void syscall_write(UUID syscallUUID, int pid, int sockfd, void * buffer, int n);
 	virtual void syscall_read(UUID syscallUUID, int pid, int sockfd, void * buffer, int n);
 
-	virtual bool add_to_sorted_read_buffer(Packet * packet, struct socket * socket);
+	/* Read buffer manipulation */
+	virtual void add_to_sorted_read_buffer(Packet * packet, struct socket * socket);
+	virtual uint32_t read_buffer_ordered_end_sequence(struct socket * socket);
+	virtual uint32_t read_buffer_ordered_size(struct socket * socket);
+	virtual uint32_t calculate_rwnd(struct socket * socket);
+	virtual bool within_read_buffer_window(struct socket * socket, Packet * arriving_packet);
 
 	/* Making packet */
 	virtual struct TCP_header * make_header(uint32_t source_ip, uint32_t dest_ip, uint16_t source_port, uint16_t dest_port, uint32_t seq_number, uint32_t ack_number,uint8_t flags, uint16_t window_size);
 	virtual Packet * makeHeaderPacket(uint32_t source_ip, uint32_t dest_ip, uint16_t source_port, uint16_t dest_port, uint32_t seq_number, uint32_t ack_number,uint8_t flags,uint16_t window_size);
 	virtual Packet * makeDataPacket(void * buffer, uint32_t data_size,uint32_t source_ip, uint32_t dest_ip,uint16_t source_port, uint16_t dest_port,uint32_t seq_number, uint32_t ack_number,uint8_t flags);
 
+	/* Helper functions */
 	virtual void free_resources(Packet * packet, struct TCP_header * header);
 	virtual int minimum2(int a, int b);
 	virtual int minimum4(int a, int b, int c,int d);
@@ -194,8 +201,7 @@ private:
 	virtual uint16_t tcp_sum(uint32_t source, uint32_t dest, uint8_t* buffer, size_t length);
 	virtual uint16_t one_sum(uint8_t* buffer, size_t size);
 
-
-	//timer
+	/* Timer functions */
 	virtual void start_timer(struct socket * socket);
 	virtual void restart_timer(struct socket * socket);
 	virtual void cancel_timer(struct socket * socket);
