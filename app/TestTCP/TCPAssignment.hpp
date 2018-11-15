@@ -137,7 +137,10 @@ private:
 	std::list<struct socket *> socket_list;	//
 
 	int debug_count = 0;
-	int debug;
+	uint32_t debug;
+
+	uint32_t debug2 = 0;
+	uint32_t debug_size = 0;
 	// /* Write buffer */
 	// std::list<Packet *> write_buffer; //list of packets
 	// uint32_t write_buffer_size = 0;
@@ -162,6 +165,7 @@ private:
 	virtual void syscall_read(UUID syscallUUID, int pid, int sockfd, void * buffer, int n);
 
 	/* Read buffer manipulation */
+	// virtual bool reject(Packet * packet, struct socket * socket);
 	virtual bool wrap_around(uint32_t start, uint32_t end, uint32_t sequence_number);
 	virtual void add_to_sorted_read_buffer(Packet * packet, struct socket * socket);
 	virtual uint32_t read_buffer_ordered_end_sequence(struct socket * socket);
