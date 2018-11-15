@@ -68,6 +68,8 @@ struct socket{
 
 	TCP_state state;
 
+	uint32_t fin_sequence_number;	//used for receiver side, 4-way pending read assist. buffering out of order fin.
+
 	uint32_t sequence_number;
 	uint32_t last_ack;	//so far, used for receiver sending ack
 
