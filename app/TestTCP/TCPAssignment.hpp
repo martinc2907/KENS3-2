@@ -162,6 +162,7 @@ private:
 	virtual void syscall_read(UUID syscallUUID, int pid, int sockfd, void * buffer, int n);
 
 	/* Read buffer manipulation */
+	virtual bool wrap_around(uint32_t start, uint32_t end, uint32_t sequence_number);
 	virtual void add_to_sorted_read_buffer(Packet * packet, struct socket * socket);
 	virtual uint32_t read_buffer_ordered_end_sequence(struct socket * socket);
 	virtual uint32_t read_buffer_ordered_size(struct socket * socket);

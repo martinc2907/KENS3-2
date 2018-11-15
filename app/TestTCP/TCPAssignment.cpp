@@ -162,26 +162,6 @@ void TCPAssignment::fake_read(UUID syscallUUID, int pid, int sockfd, void * buff
 	/* Return */
 	this->returnSystemCall(syscallUUID, N_copy);
 	return; 
-
-
-
-	// memcpy(buffer, socket->read_buffer, N);
-
-	// /* Adjust read buffer */
-	// char temp[socket->read_buffer_size - N];
-	// memcpy(temp, socket->read_buffer + N, socket->read_buffer_size - N);
-	// memcpy(buffer, temp, socket->read_buffer_size - N);
-
-	// /* Adjust size */
-	// socket->read_buffer_size -= N;
-
-	// /* Return */
-	// this->returnSystemCall(syscallUUID, N_copy);
-	// return;
-
-	//initialise read buffer when packetArrived.
-	//What about ack retransmission? keep track of last ack only.
-	//what about buffering out of order packets. 
 }
 
 
@@ -1803,27 +1783,81 @@ int TCPAssignment::minimum4(int a, int b, int c, int d){
 	}
 }
 
+
+//adds incoming packet to read buffer in the correct position.
+//doesn't do anything if packet already exists in the read buffer.
 void TCPAssignment::add_to_sorted_read_buffer(Packet * arriving_packet, struct socket * socket){
 
-	uint32_t arriving_sequence_number;
-	uint32_t packet_sequence_number;
-	Packet * packet;
+	std::list<Packet *>::iterator it;
 
-
-	arriving_packet->readData(SEQ_OFFSET, &arriving_sequence_number, 4);
-	arriving_sequence_number = ntohl(arriving_sequence_number);
-
+	//find out read buffer limits
 	uint32_t read_buffer_start = socket->to_read + socket->packet_data_read;
 	uint32_t read_buffer_end = read_buffer_start + 51200;
 
-	//arriving packet wrap aroudn or no?
-	bool wrap_around = wrap_around(read_buffer_start,read_buffer_end,arriving_sequence_number);
+	uint32_t arriving_sequence_number;
 
-	if(wrap_around){
+	Packet * packet;
+	uint32_t packet_sequence_number;
+
+	//get arriving packet sequence number
+	arriving_packet->readData(SEQ_OFFSET, &arriving_sequence_number, 4);
+	arriving_sequence_number = ntohl(arriving_sequence_number);
+
+	//arriving packet wrap aroudn or no?
+	bool wrap_around = this->wrap_around(read_buffer_start,read_buffer_end,arriving_sequence_number);
+
+	if(!wrap_around){
+		//find where to insert
+		for(it = socket->read_buffer->begin(); it!=socket->read_buffer->end();++it){
+			packet = *it;
+			packet->readData(SEQ_OFFSET, &packet_sequence_number, 4);
+			packet_sequence_number = ntohl(packet_sequence_number);
+
+			//is the packet a wrap around?
+			bool p_wrap_around = this->wrap_around(read_buffer_start,read_buffer_end,packet_sequence_number);
+			if(!p_wrap_around){
+				if(arriving_sequence_number == packet_sequence_number)
+					return;
+				if(arriving_sequence_number < packet_sequence_number){
+					socket->read_buffer->insert(it, arriving_packet);
+					std::cout<<"added to read buffer\n";
+					return;
+				}
+			}
+			else{
+				socket->read_buffer->insert(it, arriving_packet);
+				return;
+			}
+		}
 
 	}else{
-		
+		//find where to insert
+		for(it = socket->read_buffer->begin(); it!=socket->read_buffer->end();++it){
+			packet = *it;
+			packet->readData(SEQ_OFFSET, &packet_sequence_number, 4);
+			packet_sequence_number = ntohl(packet_sequence_number);
+
+			//is the packet a wrap around?
+			bool p_wrap_around = this->wrap_around(read_buffer_start, read_buffer_end, packet_sequence_number);
+			if(!p_wrap_around){
+				continue;
+			}
+			else{
+				if(arriving_sequence_number == packet_sequence_number)
+					return;
+				if(arriving_sequence_number < packet_sequence_number){
+					socket->read_buffer->insert(it, arriving_packet);
+					std::cout<<"added to read buffer\n";
+					return;
+				}
+			}
+		}
 	}
+
+	//insert at end.
+	std::cout<<"added to read buffer\n";
+	socket->read_buffer->push_back(arriving_packet);
+	return;
 }
 
 bool TCPAssignment::wrap_around(uint32_t start, uint32_t end, uint32_t sequence_number){
@@ -1833,82 +1867,6 @@ bool TCPAssignment::wrap_around(uint32_t start, uint32_t end, uint32_t sequence_
 		return true;
 	}
 }
-
-
-//return true if successfully inserted, false if not(since it already exists)
-//adds a packet to the correct place in the read buffer even if it's out of order.
-void TCPAssignment::add_to_sorted_read_buffer(Packet * packet, struct socket * socket){
-
-	uint32_t arriving_sequence_number;
-	uint32_t packet_sequence_number;
-	std::list<Packet *>::iterator it;
-	Packet * e;
-
-	//if buffer empty, just insert.
-	if(socket->read_buffer->empty()){
-		std::cout<<"added to read buffer\n";
-		socket->read_buffer->push_back(packet);
-		// socket->read_buffer_size += packet->getSize()-54;
-		return;
-	}
-
-	//get arriving packet's sequence number.
-	packet->readData(SEQ_OFFSET, &arriving_sequence_number, 4);
-	arriving_sequence_number = ntohl(arriving_sequence_number);
-
-	uint32_t read_buffer_start = socket->to_read + socket->packet_data_read;
-	uint32_t read_buffer_end = read_buffer_start + 51200;
-
-	//find where to insert
-	for(it = socket->read_buffer->begin(); it!=socket->read_buffer->end();++it){
-		e = *it;
-		e->readData(SEQ_OFFSET, &packet_sequence_number,4);
-		packet_sequence_number = ntohl(packet_sequence_number);
-
-		//if there is overlapping packet already
-		if(arriving_sequence_number == packet_sequence_number){
-			return;
-		}
-
-		// if(arriving_sequence_number < packet_sequence_number ){
-		// 	//insert before e
-		// 	socket->read_buffer->insert(it, packet);
-		// 	// socket->read_buffer->size += packet->getSize()-54;
-		// 	std::cout<<"added to read buffer\n";
-		// 	return;
-		// }
-
-
-		if(read_buffer_start < read_buffer_end){
-			if(arriving_sequence_number < packet_sequence_number ){
-				//insert before e
-				socket->read_buffer->insert(it, packet);
-				return;
-			}	
-		}
-
-		else{
-			
-		}
-
-		// //consider wrap around case(happens when arriving packet is at the edge)
-		// if(arriving_sequence_number + packet->getSize()-54 ){
-
-		// }
-		// uint32_t read_buffer_start = socket->to_read + socket->packet_data_read;
-		// uint32_t read_buffer_end = read_buffer_start + 51200;
-		// if(read_buffer_end <= read_buffer_start){
-
-		// }
-	}
-
-	//insert at end
-	socket->read_buffer->push_back(packet);
-	// socket->read_buffer->size += packet->getSize()-54;
-	return;
-	//list.insert(it, el) inserts to before the element that's pointed by it.
-}
-
 
 //returns end of ordered buffer part of read buffer
 uint32_t TCPAssignment::read_buffer_ordered_end_sequence(struct socket * socket){
@@ -1934,13 +1892,18 @@ uint32_t TCPAssignment::read_buffer_ordered_end_sequence(struct socket * socket)
 
 	//iterate
 	for(it = socket->read_buffer->begin(); it!=socket->read_buffer->end();++it){
+		std::cout<<"iterate\n";
 		e = *it;
 		e->readData(SEQ_OFFSET, &sequence_number,4);
 		sequence_number = ntohl(sequence_number);
 
-		if(it == socket->read_buffer->end()){
+		//if last packet
+		it++;
+		if( it == socket->read_buffer->end() ){
+			std::cout<<"wtf\n";
 			return sequence_number+(e->getSize()-54);
 		}
+		it--;
 
 		//check next node
 		it++;
@@ -1994,34 +1957,46 @@ uint32_t TCPAssignment::calculate_rwnd(struct socket * socket){
 	uint32_t data_size = e->getSize()-54;
 
 
-	if(read_buffer_end <= read_buffer_start){
-		if(sequence_number + data_size <= UINT_MAX){
-			uint32_t buffer_filled = sequence_number + data_size - read_buffer_start;
-			if(buffer_filled >= 51200){
-				assert(buffer_filled == 51200);
-				return 0;
-			}else{
-				return 51200- buffer_filled;
-			}
-		}else{
-			uint32_t buffer_filled = (sequence_number+data_size) + (UINT_MAX - read_buffer_start + 1);
-			if(buffer_filled >= 51200){
-				assert(buffer_filled == 51200);
-				return 0;
-			}else{
-				return 51200- buffer_filled;
-			}
-		}
+
+	//think about unsigned subtraction properties, this works.
+	uint32_t buffer_filled = sequence_number + data_size - read_buffer_start;
+	if(buffer_filled >= 51200){
+		assert(buffer_filled == 51200);
+		return 0;
+	}else{
+		return 51200 - buffer_filled;
 	}
-	else{
-		uint32_t buffer_filled = sequence_number + data_size - read_buffer_start;
-		if(buffer_filled >= 51200){
-			assert(buffer_filled == 51200);
-			return 0;
-		}else{
-			return 51200- buffer_filled;
-		}
-	}
+
+
+	// //read buffer wrap around
+	// if(read_buffer_end <= read_buffer_start){
+	// 	if(sequence_number + data_size -1 <= UINT_MAX){
+	// 		uint32_t buffer_filled = sequence_number + data_size - read_buffer_start;
+	// 		if(buffer_filled >= 51200){
+	// 			assert(buffer_filled == 51200);
+	// 			return 0;
+	// 		}else{
+	// 			return 51200- buffer_filled;
+	// 		}
+	// 	}else{
+	// 		uint32_t buffer_filled = (sequence_number+data_size) + (UINT_MAX - read_buffer_start + 1);
+	// 		if(buffer_filled >= 51200){
+	// 			assert(buffer_filled == 51200);
+	// 			return 0;
+	// 		}else{
+	// 			return 51200- buffer_filled;
+	// 		}
+	// 	}
+	// }
+	// else{
+	// 	uint32_t buffer_filled = sequence_number + data_size - read_buffer_start;
+	// 	if(buffer_filled >= 51200){
+	// 		assert(buffer_filled == 51200);
+	// 		return 0;
+	// 	}else{
+	// 		return 51200- buffer_filled;
+	// 	}
+	// }
 }
 
 bool TCPAssignment::within_read_buffer_window(struct socket * socket, Packet * arriving_packet){
@@ -2052,11 +2027,11 @@ bool TCPAssignment::within_read_buffer_window(struct socket * socket, Packet * a
 
 	//overflow did not happen
 	else{
-		if(arriving_sequence_number < read_buffer_start){
+		if(arriving_sequence_number < read_buffer_start || arriving_sequence_number >= read_buffer_end){
 			return false;
 		}
 
-		if(arriving_sequence_number + data_size > read_buffer_end){
+		if(arriving_sequence_number + data_size < read_buffer_start || arriving_sequence_number + data_size > read_buffer_end){
 			return false;
 		}
 		return true;
