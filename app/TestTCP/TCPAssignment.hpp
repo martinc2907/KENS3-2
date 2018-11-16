@@ -106,6 +106,10 @@ struct socket{
 	UUID timer_uuid;
 
 	int duplicate_ack;
+
+	bool sender_fin_number;
+
+	UUID close_uuid;
 };
 
 //20 bytes.
@@ -204,6 +208,8 @@ private:
 	virtual void fake_read(UUID syscallUUID, int pid, int sockfd, void * buffer, int n);
 	virtual uint16_t get_port();
 	virtual void free_socket(struct socket * socket);
+
+	virtual bool within_write_buffer_window(struct socket * socket, uint32_t ack_number);
 
 	/* Checksum */
 	virtual uint16_t tcp_sum(uint32_t source, uint32_t dest, uint8_t* buffer, size_t length);

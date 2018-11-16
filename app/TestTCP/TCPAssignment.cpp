@@ -32,7 +32,6 @@ TCPAssignment::~TCPAssignment()
 void TCPAssignment::initialize()
 {
 	//just for printing warning when running my code.
-	int a;
 	// std::cout<<"initialize\n";
 }
 
@@ -524,9 +523,18 @@ void TCPAssignment::syscall_close(UUID syscallUUID, int pid, int param1_int){
 		packet->writeData(14+16, &(socket->dest_ip), 4);
 
 		/* Make packet header */
+		// struct TCP_header * header = make_header(socket->source_ip,socket->dest_ip, 
+		// 	socket->source_port,socket->dest_port,
+		// 	socket->sequence_number,0,0b00000001,51200);
+
+		//send finack
+		uint32_t ack = read_buffer_ordered_end_sequence(socket);
+		if(ack == socket->sender_fin_number){//every packet been received.
+			ack+=1;
+		}
 		struct TCP_header * header = make_header(socket->source_ip,socket->dest_ip, 
 			socket->source_port,socket->dest_port,
-			socket->sequence_number,0,0b00000001,51200);
+			socket->sequence_number,read_buffer_ordered_end_sequence(socket),FINACK_FLAG,51200);
 
 		/* Write header to packet */
 		packet->writeData(34,header,20);
@@ -548,7 +556,9 @@ void TCPAssignment::syscall_close(UUID syscallUUID, int pid, int param1_int){
 		}
 		this->removeFileDescriptor(pid, fd);
 		this->sendPacket("IPv4", this->clonePacket(packet));
-		this->returnSystemCall(syscallUUID,0);
+
+		socket->close_uuid = syscallUUID;
+		// this->returnSystemCall(syscallUUID,0);
 		return;
 	}
 	else if(socket->state == TCP_state::SYNRCVD){
@@ -645,6 +655,8 @@ void TCPAssignment::timerCallback(void* payload)
 
 	//retransmit and restart timer
 	Packet * e = socket->write_buffer->front();
+	// socket->timer_uuid = this->addTimer(socket, RTT);
+	this->cancelTimer(socket->timer_uuid);
 	socket->timer_uuid = this->addTimer(socket, RTT);
 	this->sendPacket("IPv4", this->clonePacket(e));
 
@@ -910,6 +922,8 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 
 		if(rcv_header->flags == FIN_FLAG){//fin
 
+			socket->sender_fin_number = ntohl(rcv_header->sequence_number);
+
 			/* Build ACK packet */
 			uint32_t ack = read_buffer_ordered_end_sequence(socket);
 			if(ack == ntohl(rcv_header->sequence_number)){//if every packet's been received
@@ -982,7 +996,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 				data_length = e->getSize()-54;
 
 				//if there are packets to be acked in write buffer
-				if( seq_number < ack_number){
+				if( within_write_buffer_window(socket,ack_number)){
 
 					while(seq_number != ack_number){
 						//remove from list and free
@@ -1122,11 +1136,11 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 	else if(socket->state == TCP_state::CLOSE_WAIT){
 		//receiving fin retransmissions
 		if(rcv_header->flags == FIN_FLAG){
-			if(ntohl(rcv_header->sequence_number != socket->receiver_sequence_number)){
-				// std::cout<<"forgot what this did\n";
-				free_resources(packet, rcv_header);
-				return;
-			}
+			// if(ntohl(rcv_header->sequence_number != socket->receiver_sequence_number)){
+			// 	// std::cout<<"forgot what this did\n";
+			// 	free_resources(packet, rcv_header);
+			// 	return;
+			// }
 
 			/* ACK packet */
 			uint32_t ack = read_buffer_ordered_end_sequence(socket);
@@ -1224,7 +1238,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			data_length = e->getSize()-54;
 
 			//if there are packets to be acked in write buffer
-			if( seq_number < ack_number){
+			if( within_write_buffer_window(socket, ack_number)){
 				while(seq_number!= ack_number){
 					//remove from list and free
 					assert(!socket->write_buffer->empty());
@@ -1432,7 +1446,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			data_length = e->getSize()-54;
 
 			//if there are packets to be acked in write buffer
-			if( seq_number < ack_number){
+			if( within_write_buffer_window(socket, ack_number)){
 				while(seq_number!= ack_number){
 					//remove from list and free
 					assert(!socket->write_buffer->empty());
@@ -1488,7 +1502,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			free_resources(packet, rcv_header);
 			return;
 		}
-
+ 
 
 
 		/* Update states */
@@ -1505,10 +1519,14 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 	else if(socket->state == TCP_state::LAST_ACK){
 
 		if(rcv_header->flags == ACK_FLAG){
-			if( ntohl(rcv_header->ack_number) != socket->sequence_number){	//if wrong ack number.
+			if( ntohl(rcv_header->ack_number) != socket->sequence_number){	//if wrong ack number for the fin receiver sent.
 				free_resources(packet, rcv_header);
 				return;
 			}
+
+			Packet * e = socket->write_buffer->front();
+			socket->write_buffer->pop_front();
+			freePacket(e);
 
 			/* Cancel timer */
 			assert(socket->timer_running);
@@ -1519,6 +1537,8 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 
 			/* Free */
 			free_resources(packet, rcv_header);
+
+			this->returnSystemCall(socket->close_uuid, 0);
 
 			return;
 		}
@@ -2110,7 +2130,6 @@ uint32_t TCPAssignment::calculate_rwnd(struct socket * socket){
 
 	//read buffer window
 	uint32_t read_buffer_start = socket->to_read + socket->packet_data_read;
-	uint32_t read_buffer_end = read_buffer_start + 51200;
 
 	//last packet in buffer
 	Packet * e = socket->read_buffer->back();
@@ -2201,6 +2220,44 @@ bool TCPAssignment::within_read_buffer_window(struct socket * socket, Packet * a
 	}
 }
 
+
+//when this is called, write buffer is never empty.
+bool TCPAssignment::within_write_buffer_window(struct socket * socket, uint32_t ack_number){
+
+	Packet * front = socket->write_buffer->front();
+	Packet * back = socket->write_buffer->back();
+
+	uint32_t write_buffer_start;
+	front->readData(SEQ_OFFSET, &write_buffer_start, 4);
+	write_buffer_start = ntohl(write_buffer_start);
+
+	uint32_t write_buffer_end;
+	back->readData(SEQ_OFFSET, &write_buffer_end, 4);
+	write_buffer_end = ntohl(write_buffer_end);
+	uint8_t flags;
+	back->readData(FLAGS_OFFSET,&flags,1);
+	if(flags == FIN_FLAG){
+		write_buffer_end +=1;
+	}else{
+		write_buffer_end += back->getSize()-54;
+	}
+
+	//if wrap around(overflow)
+	if(write_buffer_end <= write_buffer_start){
+		if( ack_number > write_buffer_start || ack_number <= write_buffer_end){
+			return true;
+		}else{
+			return false;
+		}
+	}
+	else{
+		if(ack_number > write_buffer_start && ack_number <= write_buffer_end){
+			return true;
+		}else{
+			return false;
+		}
+	}
+}
 
 void TCPAssignment::start_timer(struct socket * socket){
 	socket->timer_uuid = this->addTimer(socket, RTT);
