@@ -451,7 +451,7 @@ void TCPAssignment::syscall_connect(UUID syscallUUID, int pid, int param1_int, s
 
 void TCPAssignment::syscall_close(UUID syscallUUID, int pid, int param1_int){
 
-	std::cout<<"close\n";
+	// std::cout<<"close\n";
 	int fd = param1_int;
 
 	/* Find socket */
@@ -772,13 +772,17 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			cancel_timer(socket);
 
 			/* Make packet */
-			new_packet = makeHeaderPacket(sender_dest_ip,sender_src_ip,ntohs(rcv_header->dest_port),ntohs(rcv_header->source_port),socket->sequence_number,ntohl(rcv_header->sequence_number)+1,0b00010000,51200);
+			new_packet = makeHeaderPacket(sender_dest_ip,sender_src_ip,
+				ntohs(rcv_header->dest_port),ntohs(rcv_header->source_port),
+				socket->sequence_number,ntohl(rcv_header->sequence_number)+1,
+				0b00010000,51200);
 
 			/* Update states */
 			socket->state = TCP_state::ESTAB;
 			socket->last_ack = ntohl(rcv_header->sequence_number)+1;//dafuq?
 			socket->receiver_sequence_number = ntohl(rcv_header->sequence_number)+1;
-			
+			socket->to_read = ntohl(rcv_header->sequence_number)+1;	
+
 			free_resources(packet, rcv_header);
 
 			/* Send ACK Packet */
@@ -946,19 +950,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			return;
 
 		}
-		else if(rcv_header->flags == ACK_FLAG){//ack-data arrived
-
-			//if there is any data in the packet, write to read buffer. 
-
-			/* Two types of packets arriving
-				1) ACK packets NO data
-					- Update write buffer
-
-				2) ACK packets WITH data
-					- Send ACK
-					- Write to read buffer
-					- update write buffer
-			*/
+		else if(rcv_header->flags == ACK_FLAG){
 
 			if(packet->getSize() == 54){//Pure ACK packet
 				std::cout<<"pure ack\n";
@@ -970,7 +962,11 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 				//update window first when receiving ack
 				socket->last_rwnd = ntohs(rcv_header->window_size);
 
-				//if receiver retransmit ACK instead of SYNACK in 3 way(sometimes happens)
+				//Should ignore ack in two scenarios
+				//1) If receiver retransmit ACK instead of SYNACK in 3 way(sometimes happens in accept)
+				//2) If receiver sends retransmits ACK from 3 way (connect case)
+					//- how to tell this 3-way ack apart from data ack?
+					//- write buffer is empty. but data acks could arrive when write buffer is empty too, but these are ok to ignore since they are late acks.
 				if(socket->write_buffer->empty()){
 					free_resources(packet, rcv_header);
 					return;
