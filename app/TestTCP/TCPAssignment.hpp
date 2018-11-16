@@ -203,6 +203,7 @@ private:
 	virtual void fake_write(UUID syscallUUID, int pid, int sockfd, void * buffer, int n);
 	virtual void fake_read(UUID syscallUUID, int pid, int sockfd, void * buffer, int n);
 	virtual uint16_t get_port();
+	virtual void free_socket(struct socket * socket);
 
 	/* Checksum */
 	virtual uint16_t tcp_sum(uint32_t source, uint32_t dest, uint8_t* buffer, size_t length);

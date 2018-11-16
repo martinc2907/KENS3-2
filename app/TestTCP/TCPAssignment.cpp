@@ -39,6 +39,12 @@ void TCPAssignment::initialize()
 void TCPAssignment::finalize()
 {
 	// std::cout<<"finalize\n";
+
+	while(socket_list.size() != 0){
+		struct socket * socket = socket_list.front();
+		free_socket(socket);
+		socket_list.pop_front();
+	}
 }
 
 void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallParameter& param)
@@ -111,7 +117,7 @@ void TCPAssignment::fake_read(UUID syscallUUID, int pid, int sockfd, void * buff
 
 	/* Block read if read buffer empty */
 	if(read_buffer_ordered_size(socket) == 0){
-		std::cout<<"read block\n";
+		// std::cout<<"read block\n";
 		socket->read_block = true;
 		socket->read_uuid = syscallUUID;
 		socket->r_buffer = char_buffer;
@@ -128,7 +134,7 @@ void TCPAssignment::fake_read(UUID syscallUUID, int pid, int sockfd, void * buff
 	/* How many bytes to read? Guaranteed to read N. */
 	int N = minimum2(read_buffer_ordered_size(socket), n);
 
-	std::cout<<"read nonblock: "<<N <<"\n";
+	// std::cout<<"read nonblock: "<<N <<"\n";
 
 	/* Copy those bytes to application's buffer */
 	N_copy = N;
@@ -727,7 +733,6 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			socket->sequence_number++;
 			socket->last_ack = ntohl(rcv_header->sequence_number)+1;
 			socket->to_read = ntohl(rcv_header->sequence_number)+1; 
-			std::cout<<"to read initialise: "<< socket->to_read<<"\n";
 			debug = socket->to_read-1;
 
 			/* Free resources */
@@ -876,7 +881,6 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			assert(socket->timer_running);
 			cancel_timer(socket);
 
-			std::cout<<"accepter: 3 way established\n";
 
 			/* If we got to this state as a server socket, not a client socket(simultaneous connect) */
 			if(listening_socket != NULL){
@@ -905,7 +909,6 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 		/* Should receive FIN(or data), send ACK packet */
 
 		if(rcv_header->flags == FIN_FLAG){//fin
-			std::cout<<"fin arrived\n";
 
 			/* Build ACK packet */
 			uint32_t ack = read_buffer_ordered_end_sequence(socket);
@@ -953,7 +956,6 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 		else if(rcv_header->flags == ACK_FLAG){
 
 			if(packet->getSize() == 54){//Pure ACK packet
-				std::cout<<"pure ack\n";
 				int ack_number;
 				int seq_number;
 				int data_length;
@@ -1039,21 +1041,18 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 				//consider blocked read. 
 				//do not do out of order packets for now.
 
-				std::cout<<"data arrived:" << ntohl(rcv_header->sequence_number) - debug<<"\n";
+				// std::cout<<"data arrived:" << ntohl(rcv_header->sequence_number) - debug<<"\n";
 				/* If out of range of read buffer */
 				if( !within_read_buffer_window(socket, packet)){
 					//send ack
-					std::cout<<"out of range\n";
+					// std::cout<<"out of range\n";
 					uint32_t ack = read_buffer_ordered_end_sequence(socket);
-					std::cout<<"send ack for out of range\n";
 					uint32_t rwnd = calculate_rwnd(socket);
-					std::cout<<"send ack for out of range\n";
 					new_packet = makeHeaderPacket(sender_dest_ip, sender_src_ip,
 						ntohs(rcv_header->dest_port),ntohs(rcv_header->source_port),
 						socket->sequence_number,ack, ACK_FLAG, rwnd);
 					free_resources(packet, rcv_header);
 					this->sendPacket("IPv4", new_packet);
-					std::cout<<"send ack for out of range\n";
 					return;
 				}
 
@@ -1077,11 +1076,11 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 				//add to read buffer(adds if not existing)
 				add_to_sorted_read_buffer(this->clonePacket(packet), socket);
 
-				std::cout<<"read buffer has packets: "<< socket->read_buffer->size()<<"\n";
+				// std::cout<<"read buffer has packets: "<< socket->read_buffer->size()<<"\n";
 				/* Unblock read */
 				if(socket->read_block){
 					//will block again if there are no packets to read.
-					std::cout<<"unblock read bitch\n";
+					// std::cout<<"unblock read\n";
 					fake_read(socket->read_uuid, socket->pid, socket->fd, socket->r_buffer,socket->r_n );
 				}
 
@@ -1095,7 +1094,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 				 ACK_FLAG,rwnd);
 				this->sendPacket("IPv4", new_packet);
 
-				std::cout<<"sent ack packet: "<< ack-debug<<"\n";
+				// std::cout<<"sent ack packet: "<< ack-debug<<"\n";
 
 				free_resources(packet, rcv_header);
 				return;
@@ -1124,7 +1123,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 		//receiving fin retransmissions
 		if(rcv_header->flags == FIN_FLAG){
 			if(ntohl(rcv_header->sequence_number != socket->receiver_sequence_number)){
-				std::cout<<"forgot what this did\n";
+				// std::cout<<"forgot what this did\n";
 				free_resources(packet, rcv_header);
 				return;
 			}
@@ -1155,17 +1154,14 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			if(packet->getSize()!= 54){
 				if( !within_read_buffer_window(socket, packet)){
 					//send ack
-					std::cout<<"out of range\n";
+					// std::cout<<"out of range\n";
 					uint32_t ack = read_buffer_ordered_end_sequence(socket);
-					std::cout<<"send ack for out of range\n";
 					uint32_t rwnd = calculate_rwnd(socket);
-					std::cout<<"send ack for out of range\n";
 					new_packet = makeHeaderPacket(sender_dest_ip, sender_src_ip,
 						ntohs(rcv_header->dest_port),ntohs(rcv_header->source_port),
 						socket->sequence_number,ack, ACK_FLAG, rwnd);
 					free_resources(packet, rcv_header);
 					this->sendPacket("IPv4", new_packet);
-					std::cout<<"send ack for out of range\n";
 					return;
 				}
 
@@ -1173,7 +1169,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 
 				/* Unblock read when there is ordered packets to read(don't unblock when there exists packets, but none in order)*/
 				if(socket->read_block){
-					std::cout<<"unblock read bitch\n";
+					// std::cout<<"unblock read\n";
 					fake_read(socket->read_uuid, socket->pid, socket->fd, socket->r_buffer,socket->r_n );
 				}
 
@@ -1187,7 +1183,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 				 ACK_FLAG,rwnd);
 				this->sendPacket("IPv4", new_packet);
 
-				std::cout<<"sent ack packet: "<< ack-debug<<"\n";
+				// std::cout<<"sent ack packet: "<< ack-debug<<"\n";
 
 				free_resources(packet, rcv_header);
 				return;
@@ -1208,7 +1204,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 
 		if(rcv_header->flags == 0b00010000){//ack
 
-			std::cout<<"ack: "<< ntohl(rcv_header->ack_number) - debug<<"\n";
+			// std::cout<<"ack: "<< ntohl(rcv_header->ack_number) - debug<<"\n";
 
 			int ack_number;
 			int seq_number;
@@ -1304,7 +1300,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 		}
 		else if(rcv_header->flags == 0b00010001){//finack
 			if( ntohl(rcv_header->ack_number) != socket->sequence_number){	//if wrong ack number.
-				std::cout<<"finack doesn't ack everything\n";
+				// std::cout<<"finack doesn't ack everything\n";
 				free_resources(packet, rcv_header);
 				return;
 			}
@@ -1679,20 +1675,40 @@ struct socket * TCPAssignment::find_fd(int pid, int fd){
 	return NULL;
 }
 
+//only for test_part1
 void TCPAssignment::remove_fd(int pid, int fd){
 	struct socket * e;
 	for(std::list<struct socket *>::iterator it = socket_list.begin(); it!=socket_list.end();++it){
 		e = *it;
 		if(e->fd == fd && e->pid == pid){
-			delete(e->write_buffer);
-			delete(e->read_buffer);
-			delete(e->pending_list);
-			delete(e->estab_list);
-			delete(e);
+			free_socket(e);
 			socket_list.erase(it);
 			break;
 		}
 	}
+}
+
+void TCPAssignment::free_socket(struct socket * socket){
+	//free read buffer
+	while(socket->read_buffer->size() != 0){
+		Packet * packet = socket->read_buffer->front();
+		socket->read_buffer->pop_front();
+		freePacket(packet);
+	}
+	delete(socket->read_buffer);
+
+	//free write buffer
+	while(socket->write_buffer->size() != 0){
+		Packet * packet = socket->write_buffer->front();
+		socket->write_buffer->pop_front();
+		freePacket(packet);
+	}
+	delete(socket->write_buffer);
+
+	//no need to free pending list and estab list since they just refer to other sockets.
+	delete(socket->pending_list);
+	delete(socket->estab_list);
+	delete(socket);
 }
 
 void TCPAssignment::find_and_remove_from_list(std::list<struct socket *> * list, struct socket * socket){
@@ -1967,7 +1983,7 @@ void TCPAssignment::add_to_sorted_read_buffer(Packet * arriving_packet, struct s
 				}
 				if(arriving_sequence_number < packet_sequence_number){
 					socket->read_buffer->insert(it, arriving_packet);
-					std::cout<<"added to read buffer\n";
+					// std::cout<<"added to read buffer\n";
 					return;
 				}
 			}
@@ -1996,7 +2012,7 @@ void TCPAssignment::add_to_sorted_read_buffer(Packet * arriving_packet, struct s
 				}
 				if(arriving_sequence_number < packet_sequence_number){
 					socket->read_buffer->insert(it, arriving_packet);
-					std::cout<<"added to read buffer\n";
+					// std::cout<<"added to read buffer\n";
 					return;
 				}
 			}
@@ -2004,7 +2020,7 @@ void TCPAssignment::add_to_sorted_read_buffer(Packet * arriving_packet, struct s
 	}
 
 	//insert at end.
-	std::cout<<"added to read buffer\n";
+	// std::cout<<"added to read buffer\n";
 	socket->read_buffer->push_back(arriving_packet);
 	return;
 }
