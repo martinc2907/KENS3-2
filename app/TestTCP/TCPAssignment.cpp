@@ -1297,22 +1297,22 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			free_resources(packet, rcv_header);
 			return;
 		}
-		else if(rcv_header->flags == 0b00000001){//fin
+		// else if(rcv_header->flags == 0b00000001){//fin
 
-			/* Make packet */
-			new_packet = makeHeaderPacket(sender_dest_ip, sender_src_ip,ntohs(rcv_header->dest_port),ntohs(rcv_header->source_port),socket->sequence_number, ntohl(rcv_header->sequence_number)+1,0b00010000,51200);
+		// 	/* Make packet */
+		// 	new_packet = makeHeaderPacket(sender_dest_ip, sender_src_ip,ntohs(rcv_header->dest_port),ntohs(rcv_header->source_port),socket->sequence_number, ntohl(rcv_header->sequence_number)+1,0b00010000,51200);
 
-			/* Update states */
-			socket->state = TCP_state::CLOSING;
+		// 	/* Update states */
+		// 	// socket->state = TCP_state::CLOSING;
 
-			/* Free */
-			free_resources(packet, rcv_header);
+		// 	/* Free */
+		// 	free_resources(packet, rcv_header);
 
-			/* Send ACK packet */
-			this->sendPacket("IPv4", new_packet);
-			return;
-		}
-		else if(rcv_header->flags == 0b00010001){//finack
+		// 	/* Send ACK packet */
+		// 	this->sendPacket("IPv4", new_packet);
+		// 	return;
+		// }
+		else if(rcv_header->flags == 0b00010001 || rcv_header->flags == FIN_FLAG){//finack. treat fin like finack. kens wrong.
 			if( ntohl(rcv_header->ack_number) != socket->sequence_number){	//if wrong ack number.
 				// std::cout<<"finack doesn't ack everything\n";
 				free_resources(packet, rcv_header);

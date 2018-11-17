@@ -89,7 +89,6 @@ struct socket{
 
 	//read buffer
 	std::list<Packet *>* read_buffer; //list of packets.
-	// uint32_t read_buffer_size; //don't need size since it's sort of dynamically calcualted as needed.
 	uint32_t packet_data_read;	//how much data currently read in the frontmost packet.
 	
 	uint32_t to_read; //refers to what byte read() should read in terms of sequence number(used to reject redundant data packets)
